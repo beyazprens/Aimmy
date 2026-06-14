@@ -26,7 +26,7 @@ INPUT_SIZE = 640              # Model input boyutu
 FOV = 320                     # Tarama alani (piksel)
 CONFIDENCE = 0.40             # Minimum confidence
 AIM_SMOOTH = 5.0              # Smoothness (1=anlik, 10=cok yavas)
-DEADZONE = 3                  # Piksel - bu kadar yakinsa hareket etme
+DEADZONE = 8                  # Piksel - bu kadar yakinsa hareket etme
 HEAD_OFFSET = 0.30            # Bbox'in ustunden %30'a aim (kafa)
 PREDICTION_FACTOR = 0.15      # Hedef hiz tahmini carpani
 
