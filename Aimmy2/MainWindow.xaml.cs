@@ -2,6 +2,7 @@ using Aimmy2.AILogic;
 using Aimmy2.Class;
 using Aimmy2.Controls;
 using Aimmy2.MouseMovementLibraries.GHubSupport;
+using MouseMovementLibraries.VolmgrSupport;
 using Aimmy2.Other;
 using Aimmy2.Theme;
 using Aimmy2.UILibrary;
@@ -642,10 +643,12 @@ namespace Aimmy2
 
         private void CleanupDrivers()
         {
-            if (Dictionary.dropdownState.TryGetValue("Mouse Movement Method", out var method) &&
-                method?.ToString() == "LG HUB")
+            if (Dictionary.dropdownState.TryGetValue("Mouse Movement Method", out var method))
             {
-                LGMouse.Close();
+                if (method?.ToString() == "LG HUB")
+                    LGMouse.Close();
+                else if (method?.ToString() == "Volmgr Kernel Driver")
+                    VolmgrMouse.Close();
             }
         }
 
@@ -1093,7 +1096,8 @@ namespace Aimmy2
                     ["SendInput"] = 1,
                     ["LG HUB"] = 2,
                     ["Razer Synapse (Require Razer Peripheral)"] = 3,
-                    ["ddxoft Virtual Input Driver"] = 4
+                    ["ddxoft Virtual Input Driver"] = 4,
+                    ["Volmgr Kernel Driver"] = 5
                 }),
                 (uiManager.D_ScreenCaptureMethod, "Screen Capture Method", new Dictionary<string, int>
                 {
@@ -1235,7 +1239,8 @@ namespace Aimmy2
                     ["SendInput"] = 1,
                     ["LG HUB"] = 2,
                     ["Razer Synapse (Require Razer Peripheral)"] = 3,
-                    ["ddxoft Virtual Input Driver"] = 4
+                    ["ddxoft Virtual Input Driver"] = 4,
+                    ["Volmgr Kernel Driver"] = 5
                 }),
 
                 ("Image Size", uiManager.D_ImageSize, new Dictionary<string, int>
