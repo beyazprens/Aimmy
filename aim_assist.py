@@ -34,6 +34,12 @@ PREDICTION_FACTOR = 0.15      # Hedef hiz tahmini carpani
 BEZIER_STEPS = 3              # Kac adimda hedefe ulassin (2-5 arasi)
 BEZIER_JITTER = 0.8           # Rastgelelik (0=yok, 2=cok - insan gibi)
 
+# -- FOV Overlay --
+SHOW_FOV = True               # True = yuvarlak FOV gozukur, False = gizli
+FOV_COLOR = (0, 255, 0)      # Renk (R, G, B) - yesil
+FOV_THICKNESS = 2             # Cizgi kalinligi (piksel)
+FOV_OPACITY = 180             # Saydamlik (0-255, 255=tam gorunur)
+
 # -- Performance --
 MAX_FPS = 120                 # Maksimum dongu FPS limiti
 # ╚═══════════════════════════════════════════════════════╝
@@ -309,6 +315,177 @@ def get_screen_center():
 
 
 # ═══════════════════════════════════════════════════════
+#                  FOV OVERLAY (CIRCLE)
+# ═══════════════════════════════════════════════════════
+class FOVOverlay:
+    """
+    Ekranin ortasinda yuvarlak FOV gosterir.
+    Win32 layered window - tamamen seffaf, sadece daire gorunur.
+    Oyunu engellemez (click-through).
+    """
+
+    def __init__(self, center_x, center_y, radius):
+        self.center_x = center_x
+        self.center_y = center_y
+        self.radius = radius
+        self.visible = SHOW_FOV
+        self._hwnd = None
+        self._thread = None
+        self._running = False
+
+    def start(self):
+        if not self.visible:
+            return
+        self._running = True
+        self._thread = threading.Thread(target=self._create_window, daemon=True)
+        self._thread.start()
+        time.sleep(0.3)  # Pencerenin olusmasini bekle
+
+    def stop(self):
+        self._running = False
+        if self._hwnd:
+            try:
+                ctypes.windll.user32.PostMessageW(self._hwnd, 0x0010, 0, 0)  # WM_CLOSE
+            except Exception:
+                pass
+
+    def toggle(self):
+        """Goster/gizle"""
+        self.visible = not self.visible
+        if self._hwnd:
+            SW_SHOW = 5
+            SW_HIDE = 0
+            ctypes.windll.user32.ShowWindow(self._hwnd, SW_SHOW if self.visible else SW_HIDE)
+
+    def _create_window(self):
+        """Win32 layered transparent window olustur"""
+        import ctypes.wintypes
+
+        # Window class
+        WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_long, ctypes.c_void_p, ctypes.c_uint,
+                                      ctypes.c_void_p, ctypes.c_void_p)
+
+        def wnd_proc(hwnd, msg, wparam, lparam):
+            if msg == 0x000F:  # WM_PAINT
+                self._on_paint(hwnd)
+                return 0
+            if msg == 0x0002:  # WM_DESTROY
+                ctypes.windll.user32.PostQuitMessage(0)
+                return 0
+            return ctypes.windll.user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+        self._wnd_proc = WNDPROC(wnd_proc)
+
+        wc = ctypes.wintypes.WNDCLASS()
+        wc.lpfnWndProc = self._wnd_proc
+        wc.hInstance = ctypes.windll.kernel32.GetModuleHandleW(None)
+        wc.lpszClassName = "FOVOverlayClass"
+        wc.hbrBackground = 0
+        wc.style = 0
+
+        atom = ctypes.windll.user32.RegisterClassW(ctypes.byref(wc))
+
+        # Window size (FOV capi kadar)
+        size = self.radius * 2 + 20
+        x = self.center_x - size // 2
+        y = self.center_y - size // 2
+
+        # WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOPMOST | WS_EX_TOOLWINDOW
+        ex_style = 0x00080000 | 0x00000020 | 0x00000008 | 0x00000080
+        # WS_POPUP | WS_VISIBLE
+        style = 0x80000000 | 0x10000000
+
+        self._hwnd = ctypes.windll.user32.CreateWindowExW(
+            ex_style, "FOVOverlayClass", "FOV",
+            style, x, y, size, size,
+            None, None, wc.hInstance, None
+        )
+
+        # Layered window: siyah rengi seffaf yap
+        # LWA_COLORKEY = 0x01, LWA_ALPHA = 0x02
+        ctypes.windll.user32.SetLayeredWindowAttributes(
+            self._hwnd, 0x00000000, 0, 0x01  # Siyah = seffaf
+        )
+
+        # Always on top
+        HWND_TOPMOST = -1
+        SWP_NOMOVE = 0x0002
+        SWP_NOSIZE = 0x0001
+        ctypes.windll.user32.SetWindowPos(
+            self._hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE
+        )
+
+        # Message loop
+        msg = ctypes.wintypes.MSG()
+        while self._running:
+            ret = ctypes.windll.user32.PeekMessageW(ctypes.byref(msg), None, 0, 0, 1)
+            if ret:
+                if msg.message == 0x0012:  # WM_QUIT
+                    break
+                ctypes.windll.user32.TranslateMessage(ctypes.byref(msg))
+                ctypes.windll.user32.DispatchMessageW(ctypes.byref(msg))
+            else:
+                # Redraw periyodik
+                ctypes.windll.user32.InvalidateRect(self._hwnd, None, True)
+                time.sleep(0.033)  # ~30fps overlay
+
+    def _on_paint(self, hwnd):
+        """Daire ciz"""
+
+        class PAINTSTRUCT(ctypes.Structure):
+            _fields_ = [
+                ("hdc", ctypes.c_void_p),
+                ("fErase", ctypes.c_int),
+                ("rcPaint_left", ctypes.c_long),
+                ("rcPaint_top", ctypes.c_long),
+                ("rcPaint_right", ctypes.c_long),
+                ("rcPaint_bottom", ctypes.c_long),
+                ("fRestore", ctypes.c_int),
+                ("fIncUpdate", ctypes.c_int),
+                ("rgbReserved", ctypes.c_byte * 32),
+            ]
+
+        ps = PAINTSTRUCT()
+        hdc = ctypes.windll.user32.BeginPaint(hwnd, ctypes.byref(ps))
+
+        # Arkaplan siyah (seffaf olacak)
+        size = self.radius * 2 + 20
+
+        class RECT(ctypes.Structure):
+            _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long),
+                        ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+        rect = RECT(0, 0, size, size)
+        black_brush = ctypes.windll.gdi32.CreateSolidBrush(0x00000000)
+        ctypes.windll.user32.FillRect(hdc, ctypes.byref(rect), black_brush)
+        ctypes.windll.gdi32.DeleteObject(black_brush)
+
+        # Daire ciz - kalem (pen) olustur
+        r, g, b = FOV_COLOR
+        color = r | (g << 8) | (b << 16)  # COLORREF = 0x00BBGGRR
+        pen = ctypes.windll.gdi32.CreatePen(0, FOV_THICKNESS, color)  # PS_SOLID=0
+        old_pen = ctypes.windll.gdi32.SelectObject(hdc, pen)
+
+        # Ici bos brush (sadece kenar cizgisi)
+        null_brush = ctypes.windll.gdi32.GetStockObject(5)  # NULL_BRUSH
+        old_brush = ctypes.windll.gdi32.SelectObject(hdc, null_brush)
+
+        # Elips ciz (daire)
+        margin = 10
+        ctypes.windll.gdi32.Ellipse(hdc, margin, margin,
+                                     margin + self.radius * 2,
+                                     margin + self.radius * 2)
+
+        # Temizle
+        ctypes.windll.gdi32.SelectObject(hdc, old_pen)
+        ctypes.windll.gdi32.SelectObject(hdc, old_brush)
+        ctypes.windll.gdi32.DeleteObject(pen)
+
+        ctypes.windll.user32.EndPaint(hwnd, ctypes.byref(ps))
+
+
+
+# ═══════════════════════════════════════════════════════
 #              THREADED INFERENCE ENGINE
 # ═══════════════════════════════════════════════════════
 class InferenceEngine:
@@ -429,6 +606,11 @@ def main():
     center_x, center_y = get_screen_center()
     print(f"  Ekran: {center_x*2}x{center_y*2} | Merkez: ({center_x},{center_y})")
 
+    # FOV Overlay
+    overlay = FOVOverlay(center_x, center_y, FOV // 2)
+    overlay.start()
+    print(f"  FOV Overlay: {'ACIK' if SHOW_FOV else 'KAPALI'}")
+
     # Driver
     driver = Driver()
     print("  Driver: OK")
@@ -533,6 +715,7 @@ def main():
         print("\n  Kapatiliyor...")
     finally:
         engine.stop()
+        overlay.stop()
         driver.close()
         print("  Kapandi.")
 
