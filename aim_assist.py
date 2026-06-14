@@ -20,7 +20,9 @@ import onnxruntime as ort
 MODEL_PATH = os.path.abspath("1.5kR6.onnx")
 FOV = 320                    # Ekranın ortasından kaç piksel alan taranacak (kare)
 CONFIDENCE_THRESHOLD = 0.45  # Minimum güven eşiği (0.0 - 1.0)
-AIM_SPEED = 0.6              # Aim hızı (0.1 yavaş - 1.0 anlık)
+AIM_SPEED = 0.25             # Aim hızı (0.05 çok yavaş - 0.5 hızlı) - düşük = smooth
+SMOOTHING = 0.4              # EMA smoothing faktörü (0.1 çok smooth - 0.9 hızlı tepki)
+DEADZONE = 5                 # Bu piksel mesafe içindeyse hareket etme (oscillation önler)
 INPUT_SIZE = 640             # ONNX model giriş boyutu
 # ╚══════════════════════════════════════════╝
 
@@ -178,13 +180,54 @@ def postprocess(output, frame_width, frame_height):
     return cx, cy, filtered_scores[best_idx]
 
 
+# === [ Smoothing State ] ===
+class AimState:
+    """Aim smoothing için durum tutucu"""
+    def __init__(self):
+        self.smooth_x = 0.0
+        self.smooth_y = 0.0
+        self.last_target_x = 0.0
+        self.last_target_y = 0.0
+        self.no_target_count = 0
+
+    def reset(self):
+        self.smooth_x = 0.0
+        self.smooth_y = 0.0
+        self.last_target_x = 0.0
+        self.last_target_y = 0.0
+        self.no_target_count = 0
+
+    def update(self, offset_x, offset_y):
+        """EMA smoothing uygula - jitter ve oscillation önler"""
+        # EMA: smooth = smooth * (1 - alpha) + new * alpha
+        self.smooth_x = self.smooth_x * (1.0 - SMOOTHING) + offset_x * SMOOTHING
+        self.smooth_y = self.smooth_y * (1.0 - SMOOTHING) + offset_y * SMOOTHING
+
+        # Mesafe hesapla
+        distance = (self.smooth_x ** 2 + self.smooth_y ** 2) ** 0.5
+
+        # Deadzone: çok yakınsa hareket etme (oscillation önler)
+        if distance < DEADZONE:
+            return 0, 0
+
+        # Mesafeye göre hız ayarla: yakınken yavaşla (overshoot önler)
+        # Uzaktayken tam hız, yakınken düşük hız
+        speed_factor = min(distance / (FOV * 0.3), 1.0) * AIM_SPEED
+
+        move_x = self.smooth_x * speed_factor
+        move_y = self.smooth_y * speed_factor
+
+        return move_x, move_y
+
+
 # === [ Ana Döngü ] ===
 def main():
     print("=" * 50)
     print("  PYTHON AIM ASSIST")
     print("=" * 50)
     print(f"  FOV: {FOV}px | Confidence: {CONFIDENCE_THRESHOLD}")
-    print(f"  Aim Speed: {AIM_SPEED} | Model: {MODEL_PATH}")
+    print(f"  Aim Speed: {AIM_SPEED} | Smoothing: {SMOOTHING}")
+    print(f"  Deadzone: {DEADZONE}px | Model: {MODEL_PATH}")
     print(f"  Aktivasyon: Mouse2 (Sag Tik) basili tut")
     print("=" * 50)
 
@@ -197,13 +240,20 @@ def main():
     print("=" * 50)
 
     sct = mss.mss()
+    aim = AimState()
+    was_pressed = False
 
     while True:
         try:
-            # Mouse2 basılı değilse bekle
+            # Mouse2 basılı değilse bekle ve state'i resetle
             if not is_mouse2_pressed():
+                if was_pressed:
+                    aim.reset()
+                    was_pressed = False
                 time.sleep(0.005)
                 continue
+
+            was_pressed = True
 
             # Ekran yakala
             frame = capture_fov(sct, center_x, center_y)
@@ -218,8 +268,14 @@ def main():
             result = postprocess(outputs, FOV, FOV)
 
             if result is None:
+                # Hedef kaybolursa smooth değerleri yavaşça sıfırla
+                aim.no_target_count += 1
+                if aim.no_target_count > 5:
+                    aim.smooth_x *= 0.5
+                    aim.smooth_y *= 0.5
                 continue
 
+            aim.no_target_count = 0
             target_x, target_y, conf = result
 
             # Hedefin ekran merkezine göre offset'i
@@ -227,13 +283,12 @@ def main():
             offset_x = target_x - half
             offset_y = target_y - half
 
-            # Aim speed uygula (smoothing)
-            move_x = offset_x * AIM_SPEED
-            move_y = offset_y * AIM_SPEED
+            # Smooth hareket hesapla
+            move_x, move_y = aim.update(offset_x, offset_y)
 
             # Driver ile mouse hareket ettir
-            if abs(move_x) > 1 or abs(move_y) > 1:
-                send_mouse_move(int(move_x), int(move_y))
+            if abs(move_x) > 0.5 or abs(move_y) > 0.5:
+                send_mouse_move(int(round(move_x)), int(round(move_y)))
 
         except KeyboardInterrupt:
             print("\nKapatiliyor...")
