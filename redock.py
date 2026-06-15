@@ -49,6 +49,14 @@ STICKY_DISTANCE     = 45.0
 TARGET_LOCK_BONUS   = 60.0
 MAX_LOST_FRAMES     = 5
 
+# Triggerbot zamanlama sabitleri (C++'dan alınan değerler)
+TRIGGER_RADIUS         = 25        # piksel cinsinden tetikleyici yarıçapı
+TRIGGER_COOLDOWN       = 0.120     # single mode: ateşler arası minimum bekleme (saniye)
+TRIGGER_PRESS_DURATION = 0.025     # single mode: LMB basılı tutma süresi (saniye)
+
+# Recoil baz değeri (C++ ölçümlere dayalı sabit)
+RECOIL_BASE = 6.2
+
 DEVICE_NAME         = r"\\.\volmgra"
 IO_SEND_MOUSE_EVENT = 0x1FE3BD28
 
@@ -106,7 +114,8 @@ class Driver:
             None,
         )
         if self.handle == ctypes.wintypes.HANDLE(-1).value:
-            print(f"[UYARI] Driver açılamadı: {ctypes.GetLastError()}")
+            error_msg = ctypes.FormatError(ctypes.GetLastError())
+            print(f"[UYARI] Driver açılamadı: {error_msg}")
             self.handle = None
 
     def move(self, x: int, y: int, button_flags: int = 0):
@@ -399,8 +408,9 @@ class CaptureThread(threading.Thread):
         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         try:
             session = ort.InferenceSession(MODEL_PATH, sess_options=opts, providers=providers)
-        except Exception:
-            # DML yoksa sadece CPU
+        except Exception as e:
+            # DML sağlayıcısı mevcut değilse CPU'ya geri dön
+            print(f"[UYARI] DML sağlayıcısı kullanılamıyor: {e}")
             session = ort.InferenceSession(MODEL_PATH, sess_options=opts,
                                            providers=["CPUExecutionProvider"])
         self._session = session
@@ -409,7 +419,8 @@ class CaptureThread(threading.Thread):
     def _preprocess(self, img_bgr: np.ndarray) -> np.ndarray:
         img = cv2.resize(img_bgr, (INPUT_SIZE, INPUT_SIZE))
         img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        img = img.astype(np.float16) / 255.0
+        # Önce float32 ile normalize et, sonra float16'ya çevir (precision loss önlenir)
+        img = (img.astype(np.float32) / 255.0).astype(np.float16)
         img = np.transpose(img, (2, 0, 1))
         return np.expand_dims(img, 0)
 
@@ -516,8 +527,8 @@ class ScreenshotManager:
         raw = sct.grab(mon)
         img = np.frombuffer(raw.raw, dtype=np.uint8).reshape(raw.height, raw.width, 4)
         img = img[:, :, :3]
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        path = os.path.join("screenshots", f"shot_{ts}.png")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        path = os.path.join("screenshots", f"shot_{timestamp}.png")
         cv2.imwrite(path, img)
 
 
@@ -756,6 +767,7 @@ def main():
                 continue
 
             # Aspect ratio dinamik ölçekleme
+            # 2.5 böleni: dikey hitbox'ı yatay boyutla karşılaştırılabilir hale getirir
             w = best_w
             h = best_h
             if w > h * 0.8:
@@ -784,11 +796,11 @@ def main():
             final_move_x = clamp(cur_dx, -MAX_MOVE_SPEED, MAX_MOVE_SPEED)
             final_move_y = clamp(cur_dy, -MAX_MOVE_SPEED, MAX_MOVE_SPEED)
 
-            # Recoil kompanzasyonu
+            # Recoil kompanzasyonu (RECOIL_BASE: C++ ölçümlere dayalı sabit dikey itme)
             is_shooting_held = key_pressed(VK_LBUTTON)
             is_auto_firing   = TRIGGERBOT_ENABLED and TRIGGER_AUTO_MODE and best is not None
             if RECOIL_ENABLED and (is_shooting_held or is_auto_firing):
-                final_move_y += 6.2 * RECOIL_STRENGTH
+                final_move_y += RECOIL_BASE * RECOIL_STRENGTH
 
             # Sub-pixel düzeltmesi (C++ mantığı)
             if abs(final_move_x) >= 0.5 and round(final_move_x) == 0:
@@ -805,8 +817,7 @@ def main():
 
             # ── TRİGGERBOT ───────────────────────────────────
             if TRIGGERBOT_ENABLED and best is not None:
-                trigger_r = 25
-                in_trigger = (abs(aim_dx) < trigger_r and abs(aim_dy) < trigger_r)
+                in_trigger = (abs(aim_dx) < TRIGGER_RADIUS and abs(aim_dy) < TRIGGER_RADIUS)
 
                 if TRIGGER_AUTO_MODE:
                     # LMB bas/bırak hedef içindeyken
@@ -817,13 +828,13 @@ def main():
                         driver.click(0x0002)   # LMB up (flag)
                         trigger_pressed = False
                 else:
-                    # Single shot modu: 120ms cooldown, 25ms basış
+                    # Single shot modu: cooldown & basış süresi sabitlere göre
                     now_t = time.perf_counter()
-                    if in_trigger and not trigger_pressed and (now_t - trigger_last_shot) > 0.120:
+                    if in_trigger and not trigger_pressed and (now_t - trigger_last_shot) > TRIGGER_COOLDOWN:
                         driver.click(0x0001)
                         trigger_pressed   = True
                         trigger_last_shot = now_t
-                    if trigger_pressed and (time.perf_counter() - trigger_last_shot) > 0.025:
+                    if trigger_pressed and (time.perf_counter() - trigger_last_shot) > TRIGGER_PRESS_DURATION:
                         driver.click(0x0002)
                         trigger_pressed = False
 
@@ -837,8 +848,8 @@ def main():
         driver.close()
         try:
             overlay.destroy()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[UYARI] Overlay kapatılırken hata: {e}")
         save_settings()
         print("[INFO] Redock kapatıldı.")
 
