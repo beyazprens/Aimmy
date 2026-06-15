@@ -6,6 +6,7 @@ using Class;
 using InputLogic;
 using MouseMovementLibraries.ddxoftSupport;
 using MouseMovementLibraries.RazerSupport;
+using MouseMovementLibraries.VolmgrSupport;
 using Other;
 using System.Windows;
 using System.Windows.Controls;
@@ -232,6 +233,7 @@ namespace Aimmy2.Controls
                     uiManager.DDI_LGHUB = _mainWindow.AddDropdownItem(d, "LG HUB");
                     uiManager.DDI_RazerSynapse = _mainWindow.AddDropdownItem(d, "Razer Synapse (Require Razer Peripheral)");
                     uiManager.DDI_ddxoft = _mainWindow.AddDropdownItem(d, "ddxoft Virtual Input Driver");
+                    uiManager.DDI_Volmgr = _mainWindow.AddDropdownItem(d, "Volmgr Kernel Driver");
 
                     // Setup handlers
                     uiManager.DDI_LGHUB.Selected += async (s, e) =>
@@ -249,6 +251,12 @@ namespace Aimmy2.Controls
                     uiManager.DDI_ddxoft.Selected += async (s, e) =>
                     {
                         if (!await DdxoftMain.Load())
+                            await ResetToMouseEvent();
+                    };
+
+                    uiManager.DDI_Volmgr.Selected += async (s, e) =>
+                    {
+                        if (!VolmgrMouse.Load())
                             await ResetToMouseEvent();
                     };
                 }, tooltip: "How mouse movements are sent. Try different options if aim assist isn't working.")

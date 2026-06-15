@@ -4,6 +4,7 @@ using Class;
 using MouseMovementLibraries.ddxoftSupport;
 using MouseMovementLibraries.RazerSupport;
 using MouseMovementLibraries.SendInputSupport;
+using MouseMovementLibraries.VolmgrSupport;
 using System.Drawing;
 using System.Runtime.InteropServices;
 
@@ -56,6 +57,10 @@ namespace InputLogic
                 case "ddxoft Virtual Input Driver":
                     mouseDownAction = () => DdxoftMain.ddxoftInstance.btn!(1);
                     mouseUpAction = () => DdxoftMain.ddxoftInstance.btn(2);
+                    break;
+                case "Volmgr Kernel Driver":
+                    mouseDownAction = () => VolmgrMouse.Click(1);
+                    mouseUpAction = () => VolmgrMouse.Click(2);
                     break;
                 default:
                     mouseDownAction = () => mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
@@ -212,6 +217,10 @@ namespace InputLogic
 
                 case "ddxoft Virtual Input Driver":
                     DdxoftMain.ddxoftInstance.movR!(newPosition.X, newPosition.Y);
+                    break;
+
+                case "Volmgr Kernel Driver":
+                    VolmgrMouse.Move(newPosition.X, newPosition.Y);
                     break;
 
                 default:
